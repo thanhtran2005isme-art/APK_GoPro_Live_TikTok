@@ -27,6 +27,24 @@
             android:text="@string/setup_description"
             android:textAppearance="?attr/textAppearanceBodyMedium" />
 
+        <androidx.media3.ui.PlayerView
+            android:id="@+id/previewPlayerView"
+            android:layout_width="match_parent"
+            android:layout_height="220dp"
+            android:layout_marginTop="20dp"
+            android:background="#000000"
+            app:resize_mode="fit"
+            app:show_buffering="when_playing"
+            app:use_controller="false" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:gravity="center"
+            android:text="Live preview sẽ xuất hiện ở khung trên"
+            android:textAppearance="?attr/textAppearanceBodySmall" />
+
         <com.google.android.material.textfield.TextInputLayout
             android:id="@+id/ssidLayout"
             android:layout_width="match_parent"
