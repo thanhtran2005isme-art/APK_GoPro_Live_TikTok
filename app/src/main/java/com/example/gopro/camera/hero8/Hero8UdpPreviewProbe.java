@@ -19,11 +19,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Debug probe for the legacy GoPro UDP preview stream.
- *
- * <p>The probe receives UDP/8554, keeps the HERO8 preview session alive and feeds the incoming
- * bytes to {@link MpegTsStreamInspector}. It still does not decode/render frames; its job is to
- * prove the real HERO8 stream format before the playback pipeline is selected.</p>
+ * Receives the HERO8 legacy UDP preview stream, inspects it and relays the exact MPEG-TS datagrams
+ * to a loopback UDP port consumed by Media3.
  */
 public final class Hero8UdpPreviewProbe implements AutoCloseable {
 
@@ -85,6 +82,7 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
 
     private void receiveLoop(@NonNull Network network) {
         DatagramSocket socket = null;
+        DatagramSocket relaySocket = null;
         try {
             socket = new DatagramSocket(null);
             socket.setReuseAddress(true);
@@ -92,6 +90,9 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
             socket.bind(new InetSocketAddress(UDP_PORT));
             socket.setSoTimeout(RECEIVE_TIMEOUT_MS);
             receiveSocket = socket;
+
+            relaySocket = new DatagramSocket();
+            InetAddress loopback = InetAddress.getLoopbackAddress();
 
             mainHandler.post(listener::onStarted);
 
@@ -110,9 +111,19 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
                     totalPackets++;
                     totalBytes += packetLength;
                     intervalBytes += packetLength;
+
                     streamInspector.consume(packet.getData(), packetLength, receivedAt);
+
+                    DatagramPacket relayPacket =
+                            new DatagramPacket(
+                                    packet.getData(),
+                                    packet.getOffset(),
+                                    packetLength,
+                                    loopback,
+                                    Hero8PreviewPlayer.LOCAL_RELAY_PORT);
+                    relaySocket.send(relayPacket);
                 } catch (SocketTimeoutException ignored) {
-                    // Timeout is expected so the loop can check the running flag and publish stats.
+                    // Timeout lets the loop publish stats and react to stop().
                 }
 
                 long now = System.currentTimeMillis();
@@ -136,11 +147,14 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
             if (running) {
                 mainHandler.post(
                         () -> listener.onError(
-                                "Không mở/nhận được UDP 8554: " + exception.getMessage()));
+                                "Không nhận/relay được preview UDP: " + exception.getMessage()));
             }
         } finally {
             if (socket != null) {
                 socket.close();
+            }
+            if (relaySocket != null) {
+                relaySocket.close();
             }
             receiveSocket = null;
         }
