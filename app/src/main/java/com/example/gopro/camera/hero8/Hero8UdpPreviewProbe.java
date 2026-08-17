@@ -21,15 +21,20 @@ import java.util.concurrent.TimeUnit;
 /**
  * Debug probe for the legacy GoPro UDP preview stream.
  *
- * <p>This class deliberately does not decode MPEG-TS yet. It proves that the phone can receive
- * packets on UDP/8554 while periodic keep-alive packets are routed to the GoPro network.</p>
+ * <p>The probe receives UDP/8554, keeps the legacy preview session alive and feeds the incoming
+ * bytes to {@link MpegTsStreamInspector}. It still does not decode/render frames; its job is to
+ * prove the real HERO8 stream format before the playback pipeline is selected.</p>
  */
 public final class Hero8UdpPreviewProbe implements AutoCloseable {
 
     public interface Listener {
         void onStarted();
 
-        void onStats(long totalPackets, long totalBytes, long bytesPerSecond);
+        void onStats(
+                long totalPackets,
+                long totalBytes,
+                long bytesPerSecond,
+                @NonNull MpegTsStreamInspector.Snapshot streamInfo);
 
         void onStopped();
 
@@ -44,6 +49,7 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Listener listener;
+    private final MpegTsStreamInspector streamInspector = new MpegTsStreamInspector();
 
     private volatile boolean running;
     private volatile DatagramSocket receiveSocket;
@@ -57,6 +63,7 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
 
     public synchronized void start(@NonNull Network network) {
         stopInternal(false);
+        streamInspector.reset();
         running = true;
 
         receiveExecutor = Executors.newSingleThreadExecutor();
@@ -96,9 +103,12 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
                 DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                 try {
                     socket.receive(packet);
+                    long receivedAt = System.currentTimeMillis();
+                    int packetLength = packet.getLength();
                     totalPackets++;
-                    totalBytes += packet.getLength();
-                    intervalBytes += packet.getLength();
+                    totalBytes += packetLength;
+                    intervalBytes += packetLength;
+                    streamInspector.consume(packet.getData(), packetLength, receivedAt);
                 } catch (SocketTimeoutException ignored) {
                     // Timeout is expected so the loop can check the running flag and publish stats.
                 }
@@ -109,11 +119,13 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
                     long bytesPerSecond = elapsed == 0 ? 0 : intervalBytes * 1_000L / elapsed;
                     long packetsSnapshot = totalPackets;
                     long bytesSnapshot = totalBytes;
+                    MpegTsStreamInspector.Snapshot streamSnapshot = streamInspector.snapshot();
                     mainHandler.post(
                             () -> listener.onStats(
                                     packetsSnapshot,
                                     bytesSnapshot,
-                                    bytesPerSecond));
+                                    bytesPerSecond,
+                                    streamSnapshot));
                     intervalBytes = 0;
                     intervalStartedAt = now;
                 }
