@@ -19,8 +19,14 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Receives the HERO8 legacy UDP preview stream, inspects it and relays the exact MPEG-TS datagrams
- * to a loopback UDP port consumed by Media3.
+ * Receives the HERO8 legacy UDP preview stream, inspects it and relays clean MPEG-TS bytes to a
+ * loopback UDP port consumed by Media3.
+ *
+ * <p>HERO8 preview datagrams observed on UDP/8554 contain a small transport header before the
+ * 188-byte MPEG-TS packets (for example 1328 bytes = 12-byte header + 7 * 188-byte TS packets).
+ * The inspector can resynchronise by scanning for TS sync bytes, but Media3 expects a clean TS
+ * byte stream. Therefore the relay strips everything before the first aligned 0x47 sync byte and
+ * forwards only complete 188-byte TS packets.</p>
  */
 public final class Hero8UdpPreviewProbe implements AutoCloseable {
 
@@ -39,6 +45,8 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
     }
 
     private static final int UDP_PORT = 8554;
+    private static final int TS_PACKET_SIZE = 188;
+    private static final int MAX_HEADER_SCAN_BYTES = 64;
     private static final int RECEIVE_TIMEOUT_MS = 1_000;
     private static final long KEEP_ALIVE_PERIOD_MS = 2_500L;
 
@@ -113,15 +121,7 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
                     intervalBytes += packetLength;
 
                     streamInspector.consume(packet.getData(), packetLength, receivedAt);
-
-                    DatagramPacket relayPacket =
-                            new DatagramPacket(
-                                    packet.getData(),
-                                    packet.getOffset(),
-                                    packetLength,
-                                    loopback,
-                                    Hero8PreviewPlayer.LOCAL_RELAY_PORT);
-                    relaySocket.send(relayPacket);
+                    relayCleanTransportStream(relaySocket, loopback, packet);
                 } catch (SocketTimeoutException ignored) {
                     // Timeout lets the loop publish stats and react to stop().
                 }
@@ -158,6 +158,53 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
             }
             receiveSocket = null;
         }
+    }
+
+    private static void relayCleanTransportStream(
+            @NonNull DatagramSocket relaySocket,
+            @NonNull InetAddress loopback,
+            @NonNull DatagramPacket sourcePacket)
+            throws IOException {
+        byte[] data = sourcePacket.getData();
+        int packetOffset = sourcePacket.getOffset();
+        int packetLength = sourcePacket.getLength();
+        int packetEnd = packetOffset + packetLength;
+
+        int tsOffset = findAlignedTsOffset(data, packetOffset, packetEnd);
+        if (tsOffset < 0) {
+            return;
+        }
+
+        int available = packetEnd - tsOffset;
+        int tsLength = available - (available % TS_PACKET_SIZE);
+        if (tsLength < TS_PACKET_SIZE) {
+            return;
+        }
+
+        DatagramPacket relayPacket =
+                new DatagramPacket(
+                        data,
+                        tsOffset,
+                        tsLength,
+                        loopback,
+                        Hero8PreviewPlayer.LOCAL_RELAY_PORT);
+        relaySocket.send(relayPacket);
+    }
+
+    /** Finds the first MPEG-TS sync byte whose next packet is also aligned on 188 bytes. */
+    private static int findAlignedTsOffset(byte[] data, int start, int end) {
+        int scanEnd = Math.min(end, start + MAX_HEADER_SCAN_BYTES);
+        for (int offset = start; offset < scanEnd; offset++) {
+            if ((data[offset] & 0xFF) != 0x47) {
+                continue;
+            }
+
+            int next = offset + TS_PACKET_SIZE;
+            if (next >= end || (data[next] & 0xFF) == 0x47) {
+                return offset;
+            }
+        }
+        return -1;
     }
 
     private void sendKeepAlive(@NonNull Network network) {
