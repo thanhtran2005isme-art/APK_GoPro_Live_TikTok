@@ -15,16 +15,15 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
- * In-memory bridge between the HERO8 UDP receiver and Media3.
+ * In-memory bridge between the HERO8 UDP receiver and the preview decoder.
  *
- * <p>This intentionally avoids a localhost UDP hop. Clean MPEG-TS chunks are copied into a bounded
- * queue and consumed by a custom Media3 DataSource. If the decoder falls behind, the oldest chunk
- * is dropped so a live preview does not accumulate seconds of latency.</p>
+ * <p>Clean MPEG-TS chunks are copied into a bounded queue. If the consumer falls behind, the
+ * oldest chunk is dropped so the live preview cannot accumulate an ever-growing delay.</p>
  */
 @UnstableApi
 public final class Hero8TsPipe {
 
-    private static final int MAX_QUEUED_CHUNKS = 512;
+    private static final int MAX_QUEUED_CHUNKS = 256;
     private static final long READ_POLL_MS = 250L;
     private static final Uri PIPE_URI = Uri.parse("hero8ts://preview");
     private static final Hero8TsPipe SHARED = new Hero8TsPipe();
@@ -41,7 +40,7 @@ public final class Hero8TsPipe {
         return SHARED;
     }
 
-    /** Starts a fresh live session while preserving packets that arrive before Media3 opens. */
+    /** Starts a fresh live session. */
     public void reset() {
         queue.clear();
         streamEnded = false;
@@ -50,6 +49,10 @@ public final class Hero8TsPipe {
     /** Wakes readers and marks the current session as ended. */
     public void endStream() {
         streamEnded = true;
+    }
+
+    public boolean isStreamEnded() {
+        return streamEnded;
     }
 
     /** Adds clean MPEG-TS bytes. Oldest data is discarded if the decoder cannot keep up. */
@@ -67,6 +70,13 @@ public final class Hero8TsPipe {
         }
     }
 
+    /** Direct low-latency consumer used by the MediaCodec preview path. */
+    @Nullable
+    public byte[] pollChunk(long timeoutMs) throws InterruptedException {
+        return queue.poll(timeoutMs, TimeUnit.MILLISECONDS);
+    }
+
+    /** Kept for diagnostics/backward compatibility while the direct decoder is being validated. */
     @NonNull
     public DataSource.Factory dataSourceFactory() {
         return () -> new PipeDataSource(this);
