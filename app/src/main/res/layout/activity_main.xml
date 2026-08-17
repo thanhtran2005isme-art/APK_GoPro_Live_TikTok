@@ -79,6 +79,23 @@
             android:text="@string/verify_http" />
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/startPreviewButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:enabled="false"
+            android:text="@string/start_preview_probe" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/stopPreviewButton"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:enabled="false"
+            android:text="@string/stop_preview_probe" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/disconnectButton"
             style="@style/Widget.MaterialComponents.Button.TextButton"
             android:layout_width="match_parent"
@@ -102,6 +119,23 @@
             android:text="@string/status_idle"
             android:textIsSelectable="true"
             android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="@string/udp_stats_label"
+            android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+        <TextView
+            android:id="@+id/udpStatsText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:fontFamily="monospace"
+            android:text="@string/udp_stats_empty"
+            android:textIsSelectable="true"
+            android:textSize="13sp" />
 
         <TextView
             android:layout_width="wrap_content"
