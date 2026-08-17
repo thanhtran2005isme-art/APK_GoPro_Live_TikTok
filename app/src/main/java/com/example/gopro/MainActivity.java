@@ -17,15 +17,19 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.example.gopro.camera.hero8.GoProHttpClient;
+import com.example.gopro.camera.hero8.Hero8UdpPreviewProbe;
 import com.example.gopro.databinding.ActivityMainBinding;
 import com.example.gopro.network.GoProNetworkManager;
 
-/** Debug-first entry screen for validating HERO8 Wi-Fi and legacy gpControl access. */
+import java.util.Locale;
+
+/** Debug-first entry screen for validating HERO8 Wi-Fi, gpControl and UDP preview traffic. */
 public class MainActivity extends AppCompatActivity implements GoProNetworkManager.Listener {
 
     private ActivityMainBinding binding;
     private GoProNetworkManager networkManager;
     private GoProHttpClient httpClient;
+    private Hero8UdpPreviewProbe previewProbe;
 
     private String pendingSsid;
     private String pendingPassword;
@@ -59,10 +63,60 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
 
         networkManager = new GoProNetworkManager(this, this);
         httpClient = new GoProHttpClient();
+        previewProbe =
+                new Hero8UdpPreviewProbe(
+                        new Hero8UdpPreviewProbe.Listener() {
+                            @Override
+                            public void onStarted() {
+                                binding.startPreviewButton.setEnabled(false);
+                                binding.stopPreviewButton.setEnabled(true);
+                                setStatus("UDP/8554 đã mở. Đang chờ MPEG-TS từ HERO8…");
+                            }
+
+                            @Override
+                            public void onStats(
+                                    long totalPackets,
+                                    long totalBytes,
+                                    long bytesPerSecond) {
+                                double kibPerSecond = bytesPerSecond / 1024.0;
+                                binding.udpStatsText.setText(
+                                        String.format(
+                                                Locale.US,
+                                                "packets=%d\nbytes=%d\nrate=%.1f KiB/s",
+                                                totalPackets,
+                                                totalBytes,
+                                                kibPerSecond));
+                                if (totalPackets > 0) {
+                                    setStatus(
+                                            "Đang nhận dữ liệu preview HERO8 qua UDP/8554. Bước tiếp theo: decode MPEG-TS/H.264.");
+                                }
+                            }
+
+                            @Override
+                            public void onStopped() {
+                                binding.stopPreviewButton.setEnabled(false);
+                                binding.startPreviewButton.setEnabled(
+                                        networkManager.getActiveNetwork() != null);
+                            }
+
+                            @Override
+                            public void onError(@NonNull String message) {
+                                binding.stopPreviewButton.setEnabled(false);
+                                binding.startPreviewButton.setEnabled(
+                                        networkManager.getActiveNetwork() != null);
+                                setStatus(message);
+                            }
+                        });
 
         binding.connectButton.setOnClickListener(view -> prepareConnection());
-        binding.disconnectButton.setOnClickListener(view -> networkManager.disconnect());
+        binding.disconnectButton.setOnClickListener(
+                view -> {
+                    stopPreviewProbe(false);
+                    networkManager.disconnect();
+                });
         binding.verifyButton.setOnClickListener(view -> verifyHero8Http());
+        binding.startPreviewButton.setOnClickListener(view -> startPreviewProbe());
+        binding.stopPreviewButton.setOnClickListener(view -> stopPreviewProbe(true));
     }
 
     private void prepareConnection() {
@@ -101,6 +155,7 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
             return;
         }
         binding.httpResponseText.setText(R.string.http_response_empty);
+        binding.udpStatsText.setText(R.string.udp_stats_empty);
         networkManager.connect(pendingSsid, pendingPassword);
     }
 
@@ -120,15 +175,73 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
                     @Override
                     public void onSuccess(@NonNull String body) {
                         binding.verifyButton.setEnabled(true);
-                        setStatus("HTTP HERO8 OK. Sẵn sàng triển khai preview stream.");
+                        binding.startPreviewButton.setEnabled(true);
+                        setStatus("HTTP HERO8 OK. Có thể chạy preview probe.");
                         binding.httpResponseText.setText(trimForScreen(body));
                     }
 
                     @Override
                     public void onError(@NonNull String message) {
                         binding.verifyButton.setEnabled(true);
+                        binding.startPreviewButton.setEnabled(false);
                         setStatus(message);
                         binding.httpResponseText.setText(R.string.http_response_empty);
+                    }
+                });
+    }
+
+    private void startPreviewProbe() {
+        Network network = networkManager.getActiveNetwork();
+        if (network == null) {
+            setStatus("Chưa kết nối network GoPro.");
+            return;
+        }
+
+        binding.startPreviewButton.setEnabled(false);
+        binding.stopPreviewButton.setEnabled(true);
+        binding.udpStatsText.setText("Đang khởi tạo preview…");
+        setStatus("Đang gửi lệnh gpStream restart tới HERO8…");
+
+        httpClient.startPreview(
+                network,
+                new GoProHttpClient.Callback() {
+                    @Override
+                    public void onSuccess(@NonNull String body) {
+                        binding.httpResponseText.setText(trimForScreen(body));
+                        previewProbe.start(network);
+                    }
+
+                    @Override
+                    public void onError(@NonNull String message) {
+                        binding.startPreviewButton.setEnabled(true);
+                        binding.stopPreviewButton.setEnabled(false);
+                        setStatus("Không start được preview: " + message);
+                    }
+                });
+    }
+
+    private void stopPreviewProbe(boolean sendStopCommand) {
+        previewProbe.stop();
+        binding.udpStatsText.setText(R.string.udp_stats_empty);
+
+        Network network = networkManager.getActiveNetwork();
+        if (!sendStopCommand || network == null) {
+            return;
+        }
+
+        setStatus("Đang dừng preview HERO8…");
+        httpClient.stopPreview(
+                network,
+                new GoProHttpClient.Callback() {
+                    @Override
+                    public void onSuccess(@NonNull String body) {
+                        binding.httpResponseText.setText(trimForScreen(body));
+                        setStatus("Đã dừng preview HERO8.");
+                    }
+
+                    @Override
+                    public void onError(@NonNull String message) {
+                        setStatus("UDP probe đã dừng, nhưng lệnh stop preview lỗi: " + message);
                     }
                 });
     }
@@ -163,6 +276,8 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
     public void onConnecting() {
         binding.connectButton.setEnabled(false);
         binding.verifyButton.setEnabled(false);
+        binding.startPreviewButton.setEnabled(false);
+        binding.stopPreviewButton.setEnabled(false);
         binding.disconnectButton.setEnabled(true);
         setStatus("Đang chờ Android kết nối Wi-Fi GoPro… Hãy xác nhận hộp thoại hệ thống.");
     }
@@ -171,28 +286,40 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
     public void onConnected(@NonNull Network network) {
         binding.connectButton.setEnabled(true);
         binding.verifyButton.setEnabled(true);
+        binding.startPreviewButton.setEnabled(false);
+        binding.stopPreviewButton.setEnabled(false);
         binding.disconnectButton.setEnabled(true);
         setStatus("Đã kết nối network GoPro: " + network + ". Bấm Kiểm tra HTTP.");
     }
 
     @Override
     public void onDisconnected() {
+        previewProbe.close();
         binding.connectButton.setEnabled(true);
         binding.verifyButton.setEnabled(false);
+        binding.startPreviewButton.setEnabled(false);
+        binding.stopPreviewButton.setEnabled(false);
         binding.disconnectButton.setEnabled(false);
+        binding.udpStatsText.setText(R.string.udp_stats_empty);
         setStatus("Đã ngắt kết nối GoPro.");
     }
 
     @Override
     public void onError(@NonNull String message) {
+        previewProbe.close();
         binding.connectButton.setEnabled(true);
         binding.verifyButton.setEnabled(false);
+        binding.startPreviewButton.setEnabled(false);
+        binding.stopPreviewButton.setEnabled(false);
         binding.disconnectButton.setEnabled(false);
         setStatus(message);
     }
 
     @Override
     protected void onDestroy() {
+        if (previewProbe != null) {
+            previewProbe.close();
+        }
         if (networkManager != null) {
             networkManager.disconnect();
         }
