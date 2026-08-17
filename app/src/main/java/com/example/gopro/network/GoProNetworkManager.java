@@ -57,7 +57,7 @@ public final class GoProNetworkManager implements AutoCloseable {
         WifiNetworkSpecifier.Builder specifierBuilder =
                 new WifiNetworkSpecifier.Builder().setSsid(ssid);
 
-        if (password != null && !password.isBlank()) {
+        if (password != null && !password.isEmpty()) {
             specifierBuilder.setWpa2Passphrase(password);
         }
 
