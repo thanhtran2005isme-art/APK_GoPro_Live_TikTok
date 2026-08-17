@@ -207,8 +207,6 @@
 
     </ScrollView>
 
-    <!-- Fullscreen broadcast surface host. The SurfaceView is re-parented here at runtime so the
-         existing decoder session continues without reconnecting to the camera. Long-press exits. -->
     <FrameLayout
         android:id="@+id/broadcastOverlay"
         android:layout_width="match_parent"
@@ -217,6 +215,15 @@
         android:clickable="true"
         android:focusable="true"
         android:keepScreenOn="true"
-        android:visibility="gone" />
+        android:visibility="gone">
+
+        <SurfaceView
+            android:id="@+id/broadcastSurfaceView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_gravity="center"
+            android:keepScreenOn="true" />
+
+    </FrameLayout>
 
 </FrameLayout>
