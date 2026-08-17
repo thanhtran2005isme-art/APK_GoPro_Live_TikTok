@@ -1,194 +1,222 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/main"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true"
     tools:context=".MainActivity">
 
-    <LinearLayout
+    <ScrollView
+        android:id="@+id/setupScroll"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="24dp">
+        android:layout_height="match_parent"
+        android:fillViewport="true">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/setup_title"
-            android:textAppearance="?attr/textAppearanceHeadlineMedium" />
-
-        <TextView
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/setup_description"
-            android:textAppearance="?attr/textAppearanceBodyMedium" />
-
-        <FrameLayout
-            android:layout_width="match_parent"
-            android:layout_height="220dp"
-            android:layout_marginTop="20dp"
-            android:background="#000000">
-
-            <SurfaceView
-                android:id="@+id/previewSurfaceView"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:keepScreenOn="true" />
+            android:orientation="vertical"
+            android:padding="24dp">
 
             <TextView
-                android:id="@+id/previewErrorText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/setup_title"
+                android:textAppearance="?attr/textAppearanceHeadlineMedium" />
+
+            <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:background="#CC333333"
+                android:layout_marginTop="8dp"
+                android:text="@string/setup_description"
+                android:textAppearance="?attr/textAppearanceBodyMedium" />
+
+            <FrameLayout
+                android:id="@+id/previewContainer"
+                android:layout_width="match_parent"
+                android:layout_height="220dp"
+                android:layout_marginTop="20dp"
+                android:background="#000000">
+
+                <SurfaceView
+                    android:id="@+id/previewSurfaceView"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:keepScreenOn="true" />
+
+                <TextView
+                    android:id="@+id/previewErrorText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:background="#CC333333"
+                    android:gravity="center"
+                    android:padding="12dp"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp"
+                    android:visibility="gone"
+                    tools:text="Decoder status" />
+
+            </FrameLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
                 android:gravity="center"
-                android:padding="12dp"
-                android:textColor="#FFFFFF"
-                android:textSize="14sp"
-                android:visibility="gone"
-                tools:text="Decoder status" />
+                android:text="Live preview sẽ xuất hiện ở khung trên"
+                android:textAppearance="?attr/textAppearanceBodySmall" />
 
-        </FrameLayout>
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:gravity="center"
-            android:text="Live preview sẽ xuất hiện ở khung trên"
-            android:textAppearance="?attr/textAppearanceBodySmall" />
-
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/ssidLayout"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:hint="@string/gopro_ssid"
-            app:boxBackgroundMode="outline">
-
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/ssidInput"
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/broadcastButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:imeOptions="actionNext"
-                android:inputType="text" />
+                android:layout_marginTop="12dp"
+                android:enabled="false"
+                android:text="BROADCAST FULLSCREEN CHO TIKTOK" />
 
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/passwordLayout"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:hint="@string/gopro_password"
-            app:boxBackgroundMode="outline"
-            app:endIconMode="password_toggle">
-
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/passwordInput"
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/ssidLayout"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:imeOptions="actionDone"
-                android:inputType="textPassword" />
+                android:layout_marginTop="24dp"
+                android:hint="@string/gopro_ssid"
+                app:boxBackgroundMode="outline">
 
-        </com.google.android.material.textfield.TextInputLayout>
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/ssidInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:imeOptions="actionNext"
+                    android:inputType="text" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/connectButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="@string/connect_gopro" />
+            </com.google.android.material.textfield.TextInputLayout>
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/verifyButton"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:enabled="false"
-            android:text="@string/verify_http" />
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/passwordLayout"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:hint="@string/gopro_password"
+                app:boxBackgroundMode="outline"
+                app:endIconMode="password_toggle">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/startPreviewButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:enabled="false"
-            android:text="@string/start_preview_probe" />
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/passwordInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:imeOptions="actionDone"
+                    android:inputType="textPassword" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/stopPreviewButton"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:enabled="false"
-            android:text="@string/stop_preview_probe" />
+            </com.google.android.material.textfield.TextInputLayout>
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/disconnectButton"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:enabled="false"
-            android:text="@string/disconnect" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/connectButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:text="@string/connect_gopro" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="28dp"
-            android:text="@string/status_label"
-            android:textAppearance="?attr/textAppearanceTitleMedium" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/verifyButton"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:enabled="false"
+                android:text="@string/verify_http" />
 
-        <TextView
-            android:id="@+id/statusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:text="@string/status_idle"
-            android:textIsSelectable="true"
-            android:textAppearance="?attr/textAppearanceBodyLarge" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/startPreviewButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:enabled="false"
+                android:text="@string/start_preview_probe" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="@string/udp_stats_label"
-            android:textAppearance="?attr/textAppearanceTitleMedium" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/stopPreviewButton"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:enabled="false"
+                android:text="@string/stop_preview_probe" />
 
-        <TextView
-            android:id="@+id/udpStatsText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:fontFamily="monospace"
-            android:text="@string/udp_stats_empty"
-            android:textIsSelectable="true"
-            android:textSize="13sp" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/disconnectButton"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:enabled="false"
+                android:text="@string/disconnect" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="@string/http_response_label"
-            android:textAppearance="?attr/textAppearanceTitleMedium" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="28dp"
+                android:text="@string/status_label"
+                android:textAppearance="?attr/textAppearanceTitleMedium" />
 
-        <TextView
-            android:id="@+id/httpResponseText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:fontFamily="monospace"
-            android:text="@string/http_response_empty"
-            android:textIsSelectable="true"
-            android:textSize="12sp" />
+            <TextView
+                android:id="@+id/statusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="@string/status_idle"
+                android:textIsSelectable="true"
+                android:textAppearance="?attr/textAppearanceBodyLarge" />
 
-    </LinearLayout>
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:text="@string/udp_stats_label"
+                android:textAppearance="?attr/textAppearanceTitleMedium" />
 
-</ScrollView>
+            <TextView
+                android:id="@+id/udpStatsText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:fontFamily="monospace"
+                android:text="@string/udp_stats_empty"
+                android:textIsSelectable="true"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:text="@string/http_response_label"
+                android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+            <TextView
+                android:id="@+id/httpResponseText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:fontFamily="monospace"
+                android:text="@string/http_response_empty"
+                android:textIsSelectable="true"
+                android:textSize="12sp" />
+
+        </LinearLayout>
+
+    </ScrollView>
+
+    <!-- Fullscreen broadcast surface host. The SurfaceView is re-parented here at runtime so the
+         existing decoder session continues without reconnecting to the camera. Long-press exits. -->
+    <FrameLayout
+        android:id="@+id/broadcastOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:keepScreenOn="true"
+        android:visibility="gone" />
+
+</FrameLayout>
