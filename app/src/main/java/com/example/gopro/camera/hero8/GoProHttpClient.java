@@ -25,22 +25,42 @@ public final class GoProHttpClient implements AutoCloseable {
         void onError(@NonNull String message);
     }
 
-    private static final String STATUS_URL = "http://10.5.5.9/gp/gpControl/status";
+    private static final String BASE_URL = "http://10.5.5.9";
+    private static final String STATUS_PATH = "/gp/gpControl/status";
+    private static final String START_PREVIEW_PATH =
+            "/gp/gpControl/execute?p1=gpStream&a1=proto_v2&c1=restart";
+    private static final String STOP_PREVIEW_PATH =
+            "/gp/gpControl/execute?p1=gpStream&a1=proto_v2&c1=stop";
+
     private static final int CONNECT_TIMEOUT_MS = 5_000;
     private static final int READ_TIMEOUT_MS = 5_000;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
-    /**
-     * Verifies that the selected local-only network actually reaches the GoPro control endpoint.
-     */
+    /** Verifies that the selected local-only network reaches the legacy GoPro control endpoint. */
     public void verifyConnection(@NonNull Network network, @NonNull Callback callback) {
+        get(network, STATUS_PATH, callback);
+    }
+
+    /** Requests the legacy gpStream preview session used by pre-Open-GoPro cameras. */
+    public void startPreview(@NonNull Network network, @NonNull Callback callback) {
+        get(network, START_PREVIEW_PATH, callback);
+    }
+
+    public void stopPreview(@NonNull Network network, @NonNull Callback callback) {
+        get(network, STOP_PREVIEW_PATH, callback);
+    }
+
+    private void get(
+            @NonNull Network network,
+            @NonNull String path,
+            @NonNull Callback callback) {
         executor.execute(
                 () -> {
                     HttpURLConnection connection = null;
                     try {
-                        URL url = new URL(STATUS_URL);
+                        URL url = new URL(BASE_URL + path);
                         connection = (HttpURLConnection) network.openConnection(url);
                         connection.setRequestMethod("GET");
                         connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
