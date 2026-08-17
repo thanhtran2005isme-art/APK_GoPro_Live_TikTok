@@ -18,16 +18,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-/**
- * Receives the HERO8 legacy UDP preview stream, inspects it and relays clean MPEG-TS bytes to a
- * loopback UDP port consumed by Media3.
- *
- * <p>HERO8 preview datagrams observed on UDP/8554 contain a small transport header before the
- * 188-byte MPEG-TS packets (for example 1328 bytes = 12-byte header + 7 * 188-byte TS packets).
- * The inspector can resynchronise by scanning for TS sync bytes, but Media3 expects a clean TS
- * byte stream. Therefore the relay strips everything before the first aligned 0x47 sync byte and
- * forwards only complete 188-byte TS packets.</p>
- */
+/** Receives HERO8 UDP preview, inspects it and feeds clean MPEG-TS into {@link Hero8TsPipe}. */
 public final class Hero8UdpPreviewProbe implements AutoCloseable {
 
     public interface Listener {
@@ -50,13 +41,13 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
     private static final int RECEIVE_TIMEOUT_MS = 1_000;
     private static final long KEEP_ALIVE_PERIOD_MS = 2_500L;
 
-    // HERO8/HERO9 use controller id 1 in the legacy _GPHD_ keep-alive packet.
     private static final byte[] KEEP_ALIVE_PAYLOAD =
             "_GPHD_:1:0:2:0.000000\n".getBytes(StandardCharsets.UTF_8);
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Listener listener;
     private final MpegTsStreamInspector streamInspector = new MpegTsStreamInspector();
+    private final Hero8TsPipe tsPipe = Hero8TsPipe.shared();
 
     private volatile boolean running;
     private volatile DatagramSocket receiveSocket;
@@ -90,7 +81,6 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
 
     private void receiveLoop(@NonNull Network network) {
         DatagramSocket socket = null;
-        DatagramSocket relaySocket = null;
         try {
             socket = new DatagramSocket(null);
             socket.setReuseAddress(true);
@@ -98,9 +88,6 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
             socket.bind(new InetSocketAddress(UDP_PORT));
             socket.setSoTimeout(RECEIVE_TIMEOUT_MS);
             receiveSocket = socket;
-
-            relaySocket = new DatagramSocket();
-            InetAddress loopback = InetAddress.getLoopbackAddress();
 
             mainHandler.post(listener::onStarted);
 
@@ -121,7 +108,7 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
                     intervalBytes += packetLength;
 
                     streamInspector.consume(packet.getData(), packetLength, receivedAt);
-                    relayCleanTransportStream(relaySocket, loopback, packet);
+                    feedCleanTransportStream(packet);
                 } catch (SocketTimeoutException ignored) {
                     // Timeout lets the loop publish stats and react to stop().
                 }
@@ -147,24 +134,17 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
             if (running) {
                 mainHandler.post(
                         () -> listener.onError(
-                                "Không nhận/relay được preview UDP: " + exception.getMessage()));
+                                "Không nhận được preview UDP: " + exception.getMessage()));
             }
         } finally {
             if (socket != null) {
                 socket.close();
             }
-            if (relaySocket != null) {
-                relaySocket.close();
-            }
             receiveSocket = null;
         }
     }
 
-    private static void relayCleanTransportStream(
-            @NonNull DatagramSocket relaySocket,
-            @NonNull InetAddress loopback,
-            @NonNull DatagramPacket sourcePacket)
-            throws IOException {
+    private void feedCleanTransportStream(@NonNull DatagramPacket sourcePacket) {
         byte[] data = sourcePacket.getData();
         int packetOffset = sourcePacket.getOffset();
         int packetLength = sourcePacket.getLength();
@@ -181,17 +161,9 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
             return;
         }
 
-        DatagramPacket relayPacket =
-                new DatagramPacket(
-                        data,
-                        tsOffset,
-                        tsLength,
-                        loopback,
-                        Hero8PreviewPlayer.LOCAL_RELAY_PORT);
-        relaySocket.send(relayPacket);
+        tsPipe.offer(data, tsOffset, tsLength);
     }
 
-    /** Finds the first MPEG-TS sync byte whose next packet is also aligned on 188 bytes. */
     private static int findAlignedTsOffset(byte[] data, int start, int end) {
         int scanEnd = Math.min(end, start + MAX_HEADER_SCAN_BYTES);
         for (int offset = start; offset < scanEnd; offset++) {
