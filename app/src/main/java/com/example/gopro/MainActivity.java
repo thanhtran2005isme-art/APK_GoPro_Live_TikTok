@@ -18,12 +18,13 @@ import androidx.core.view.WindowInsetsCompat;
 
 import com.example.gopro.camera.hero8.GoProHttpClient;
 import com.example.gopro.camera.hero8.Hero8UdpPreviewProbe;
+import com.example.gopro.camera.hero8.MpegTsStreamInspector;
 import com.example.gopro.databinding.ActivityMainBinding;
 import com.example.gopro.network.GoProNetworkManager;
 
 import java.util.Locale;
 
-/** Debug-first entry screen for validating HERO8 Wi-Fi, gpControl and UDP preview traffic. */
+/** Debug-first entry screen for validating HERO8 Wi-Fi, gpControl and preview stream format. */
 public class MainActivity extends AppCompatActivity implements GoProNetworkManager.Listener {
 
     private ActivityMainBinding binding;
@@ -70,25 +71,61 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
                             public void onStarted() {
                                 binding.startPreviewButton.setEnabled(false);
                                 binding.stopPreviewButton.setEnabled(true);
-                                setStatus("UDP/8554 đã mở. Đang chờ MPEG-TS từ HERO8…");
+                                setStatus("UDP/8554 đã mở. Đang phân tích MPEG-TS/H.264 từ HERO8…");
                             }
 
                             @Override
                             public void onStats(
                                     long totalPackets,
                                     long totalBytes,
-                                    long bytesPerSecond) {
+                                    long bytesPerSecond,
+                                    @NonNull MpegTsStreamInspector.Snapshot streamInfo) {
                                 double kibPerSecond = bytesPerSecond / 1024.0;
+                                double mbitPerSecond = bytesPerSecond * 8.0 / 1_000_000.0;
+                                String container =
+                                        streamInfo.transportStreamDetected ? "MPEG-TS" : "detecting";
+                                String videoPid =
+                                        streamInfo.videoPid >= 0
+                                                ? String.format(Locale.US, "0x%04X", streamInfo.videoPid)
+                                                : "detecting";
+
                                 binding.udpStatsText.setText(
                                         String.format(
                                                 Locale.US,
-                                                "packets=%d\nbytes=%d\nrate=%.1f KiB/s",
+                                                "packets=%d\n"
+                                                        + "bytes=%d\n"
+                                                        + "rate=%.1f KiB/s (%.2f Mbit/s)\n"
+                                                        + "container=%s\n"
+                                                        + "codec=%s\n"
+                                                        + "videoPid=%s\n"
+                                                        + "resolution=%s\n"
+                                                        + "fps≈%s",
                                                 totalPackets,
                                                 totalBytes,
-                                                kibPerSecond));
-                                if (totalPackets > 0) {
+                                                kibPerSecond,
+                                                mbitPerSecond,
+                                                container,
+                                                streamInfo.codec,
+                                                videoPid,
+                                                streamInfo.resolutionLabel(),
+                                                streamInfo.fpsLabel()));
+
+                                if (streamInfo.width > 0 && streamInfo.height > 0) {
                                     setStatus(
-                                            "Đang nhận dữ liệu preview HERO8 qua UDP/8554. Bước tiếp theo: decode MPEG-TS/H.264.");
+                                            String.format(
+                                                    Locale.US,
+                                                    "Preview thực tế: %dx%d, %s, ~%s fps, %.2f Mbit/s.",
+                                                    streamInfo.width,
+                                                    streamInfo.height,
+                                                    streamInfo.codec,
+                                                    streamInfo.fpsLabel(),
+                                                    mbitPerSecond));
+                                } else if (streamInfo.transportStreamDetected) {
+                                    setStatus(
+                                            "Đã nhận MPEG-TS. Đang tìm PMT/SPS để xác định resolution và FPS…");
+                                } else if (totalPackets > 0) {
+                                    setStatus(
+                                            "Đã nhận UDP nhưng chưa xác nhận MPEG-TS. Đang tiếp tục phân tích stream…");
                                 }
                             }
 
@@ -176,7 +213,7 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
                     public void onSuccess(@NonNull String body) {
                         binding.verifyButton.setEnabled(true);
                         binding.startPreviewButton.setEnabled(true);
-                        setStatus("HTTP HERO8 OK. Có thể chạy preview probe.");
+                        setStatus("HTTP HERO8 OK. Có thể chạy preview inspector.");
                         binding.httpResponseText.setText(trimForScreen(body));
                     }
 
@@ -199,7 +236,7 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
 
         binding.startPreviewButton.setEnabled(false);
         binding.stopPreviewButton.setEnabled(true);
-        binding.udpStatsText.setText("Đang khởi tạo preview…");
+        binding.udpStatsText.setText("Đang khởi tạo preview inspector…");
         setStatus("Đang gửi lệnh gpStream restart tới HERO8…");
 
         httpClient.startPreview(
@@ -241,7 +278,7 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
 
                     @Override
                     public void onError(@NonNull String message) {
-                        setStatus("UDP probe đã dừng, nhưng lệnh stop preview lỗi: " + message);
+                        setStatus("UDP inspector đã dừng, nhưng lệnh stop preview lỗi: " + message);
                     }
                 });
     }
