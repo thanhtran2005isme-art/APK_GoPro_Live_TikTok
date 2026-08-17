@@ -7,9 +7,16 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.GestureDetector;
+import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.Surface;
+import android.view.SurfaceHolder;
 import android.view.View;
+import android.widget.FrameLayout;
 
 import androidx.activity.EdgeToEdge;
+import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
@@ -17,7 +24,9 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 
 import com.example.gopro.camera.hero8.GoProHttpClient;
 import com.example.gopro.camera.hero8.Hero8BleManager;
@@ -32,7 +41,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-/** Debug-first entry screen for validating HERO8 BLE, Wi-Fi, gpControl and live preview. */
+/** HERO8 preview + fullscreen TikTok broadcast screen. */
 public class MainActivity extends AppCompatActivity implements GoProNetworkManager.Listener {
 
     private ActivityMainBinding binding;
@@ -47,6 +56,11 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
     private String pendingPassword;
     private boolean pendingCameraPreviewStart;
     private Network pendingPreviewNetwork;
+
+    private boolean broadcastMode;
+    private boolean broadcastFill = true;
+    private int sourceVideoWidth = 16;
+    private int sourceVideoHeight = 9;
 
     private final ActivityResultLauncher<String[]> permissionLauncher =
             registerForActivityResult(
@@ -69,8 +83,10 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
         binding = ActivityMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
+        // Only the setup UI consumes system-bar insets. The black broadcast overlay deliberately
+        // stays edge-to-edge so TikTok screen capture sees a true fullscreen frame.
         ViewCompat.setOnApplyWindowInsetsListener(
-                binding.main,
+                binding.setupScroll,
                 (view, insets) -> {
                     Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
                     view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
@@ -79,29 +95,42 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
 
         networkManager = new GoProNetworkManager(this, this);
         httpClient = new GoProHttpClient();
+
         previewPlayer =
                 new Hero8PreviewPlayer(
                         binding.previewSurfaceView,
                         new Hero8PreviewPlayer.Listener() {
                             @Override
                             public void onDecoderStatus(@NonNull String message) {
-                                binding.previewErrorText.setVisibility(View.VISIBLE);
-                                binding.previewErrorText.setText(message);
+                                if (!broadcastMode) {
+                                    binding.previewErrorText.setVisibility(View.VISIBLE);
+                                    binding.previewErrorText.setText(message);
+                                }
                             }
 
                             @Override
                             public void onDecoderError(@NonNull String message) {
+                                if (broadcastMode) {
+                                    exitBroadcastMode();
+                                }
                                 binding.previewErrorText.setVisibility(View.VISIBLE);
                                 binding.previewErrorText.setText(message);
+                                binding.broadcastButton.setEnabled(false);
                                 setStatus(message);
                             }
 
                             @Override
                             public void onFirstFrame() {
                                 binding.previewErrorText.setVisibility(View.GONE);
-                                setStatus("MediaCodec đã render frame đầu tiên từ HERO8.");
+                                binding.broadcastButton.setEnabled(true);
+                                setStatus(
+                                        "Preview ổn định. PTS pacing + jitter buffer đang chạy; có thể mở Broadcast Fullscreen.");
                             }
                         });
+
+        configureBroadcastSurface();
+        configureBroadcastGestures();
+        configureBackNavigation();
 
         bleManager =
                 new Hero8BleManager(
@@ -142,6 +171,7 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
                                 binding.connectButton.setEnabled(true);
                                 binding.verifyButton.setEnabled(false);
                                 binding.startPreviewButton.setEnabled(false);
+                                binding.broadcastButton.setEnabled(false);
                                 setStatus("BLE HERO8: " + message);
                             }
                         });
@@ -187,7 +217,8 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
                                                         + "codec=%s\n"
                                                         + "videoPid=%s\n"
                                                         + "resolution=%s\n"
-                                                        + "fps≈%s",
+                                                        + "fps≈%s\n"
+                                                        + "render=PTS paced, jitter=~2 frames",
                                                 totalPackets,
                                                 totalBytes,
                                                 kibPerSecond,
@@ -199,26 +230,39 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
                                                 streamInfo.fpsLabel()));
 
                                 if (streamInfo.width > 0 && streamInfo.height > 0) {
-                                    setStatus(
-                                            String.format(
-                                                    Locale.US,
-                                                    "Đang nhận preview: %dx%d, %s, ~%s fps, %.2f Mbit/s. MediaCodec đang render trực tiếp.",
-                                                    streamInfo.width,
-                                                    streamInfo.height,
-                                                    streamInfo.codec,
-                                                    streamInfo.fpsLabel(),
-                                                    mbitPerSecond));
+                                    sourceVideoWidth = streamInfo.width;
+                                    sourceVideoHeight = streamInfo.height;
+                                    if (broadcastMode) {
+                                        applyBroadcastVideoLayout();
+                                    }
+                                    if (!broadcastMode) {
+                                        setStatus(
+                                                String.format(
+                                                        Locale.US,
+                                                        "Đang nhận preview: %dx%d, %s, ~%s fps, %.2f Mbit/s. PTS pacing đang bật.",
+                                                        streamInfo.width,
+                                                        streamInfo.height,
+                                                        streamInfo.codec,
+                                                        streamInfo.fpsLabel(),
+                                                        mbitPerSecond));
+                                    }
                                 } else if (streamInfo.transportStreamDetected) {
-                                    setStatus("Đã nhận MPEG-TS; đang tìm SPS/PPS/IDR cho MediaCodec…");
-                                } else if (totalPackets > 0) {
+                                    if (!broadcastMode) {
+                                        setStatus("Đã nhận MPEG-TS; đang tìm SPS/PPS/IDR cho MediaCodec…");
+                                    }
+                                } else if (totalPackets > 0 && !broadcastMode) {
                                     setStatus("Đã nhận UDP; đang xác định MPEG-TS…");
                                 }
                             }
 
                             @Override
                             public void onStopped() {
+                                if (broadcastMode) {
+                                    exitBroadcastMode();
+                                }
                                 previewPlayer.stop();
                                 binding.previewErrorText.setVisibility(View.GONE);
+                                binding.broadcastButton.setEnabled(false);
                                 binding.stopPreviewButton.setEnabled(false);
                                 binding.startPreviewButton.setEnabled(
                                         networkManager.getActiveNetwork() != null);
@@ -226,7 +270,11 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
 
                             @Override
                             public void onError(@NonNull String message) {
+                                if (broadcastMode) {
+                                    exitBroadcastMode();
+                                }
                                 previewPlayer.stop();
+                                binding.broadcastButton.setEnabled(false);
                                 binding.stopPreviewButton.setEnabled(false);
                                 binding.startPreviewButton.setEnabled(
                                         networkManager.getActiveNetwork() != null);
@@ -244,6 +292,188 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
         binding.verifyButton.setOnClickListener(view -> verifyHero8Http());
         binding.startPreviewButton.setOnClickListener(view -> startPreviewProbe());
         binding.stopPreviewButton.setOnClickListener(view -> stopPreviewProbe(true));
+        binding.broadcastButton.setOnClickListener(view -> enterBroadcastMode());
+    }
+
+    private void configureBroadcastSurface() {
+        binding.broadcastSurfaceView.getHolder().addCallback(
+                new SurfaceHolder.Callback() {
+                    @Override
+                    public void surfaceCreated(@NonNull SurfaceHolder holder) {
+                        if (broadcastMode) {
+                            previewPlayer.requestOutputSurface(holder.getSurface());
+                        }
+                    }
+
+                    @Override
+                    public void surfaceChanged(
+                            @NonNull SurfaceHolder holder,
+                            int format,
+                            int width,
+                            int height) {
+                        if (broadcastMode) {
+                            previewPlayer.requestOutputSurface(holder.getSurface());
+                        }
+                    }
+
+                    @Override
+                    public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
+                        // exitBroadcastMode() switches back to the normal Surface before hiding it.
+                    }
+                });
+    }
+
+    private void configureBroadcastGestures() {
+        GestureDetector detector =
+                new GestureDetector(
+                        this,
+                        new GestureDetector.SimpleOnGestureListener() {
+                            @Override
+                            public boolean onDown(@NonNull MotionEvent event) {
+                                return true;
+                            }
+
+                            @Override
+                            public boolean onDoubleTap(@NonNull MotionEvent event) {
+                                if (broadcastMode) {
+                                    broadcastFill = !broadcastFill;
+                                    applyBroadcastVideoLayout();
+                                }
+                                return true;
+                            }
+
+                            @Override
+                            public void onLongPress(@NonNull MotionEvent event) {
+                                if (broadcastMode) {
+                                    exitBroadcastMode();
+                                }
+                            }
+                        });
+
+        binding.broadcastSurfaceView.setOnTouchListener(
+                (view, event) -> detector.onTouchEvent(event));
+    }
+
+    private void configureBackNavigation() {
+        getOnBackPressedDispatcher()
+                .addCallback(
+                        this,
+                        new OnBackPressedCallback(true) {
+                            @Override
+                            public void handleOnBackPressed() {
+                                if (broadcastMode) {
+                                    exitBroadcastMode();
+                                    return;
+                                }
+                                setEnabled(false);
+                                getOnBackPressedDispatcher().onBackPressed();
+                            }
+                        });
+    }
+
+    private void enterBroadcastMode() {
+        if (!binding.broadcastButton.isEnabled() || broadcastMode) {
+            return;
+        }
+
+        broadcastMode = true;
+        broadcastFill = true;
+        binding.broadcastOverlay.setVisibility(View.VISIBLE);
+        hideSystemBarsForBroadcast();
+
+        binding.broadcastOverlay.post(
+                () -> {
+                    applyBroadcastVideoLayout();
+                    Surface surface = binding.broadcastSurfaceView.getHolder().getSurface();
+                    if (surface != null && surface.isValid()) {
+                        previewPlayer.requestOutputSurface(surface);
+                    }
+                });
+    }
+
+    private void exitBroadcastMode() {
+        if (!broadcastMode) {
+            return;
+        }
+
+        broadcastMode = false;
+        Surface normalSurface = binding.previewSurfaceView.getHolder().getSurface();
+        if (normalSurface != null && normalSurface.isValid()) {
+            previewPlayer.requestOutputSurface(normalSurface);
+        }
+
+        // Give the decoder thread one cycle to execute setOutputSurface before the fullscreen
+        // SurfaceView is hidden/destroyed.
+        mainHandler.postDelayed(
+                () -> {
+                    if (!broadcastMode) {
+                        binding.broadcastOverlay.setVisibility(View.GONE);
+                        restoreSystemBars();
+                        resetBroadcastSurfaceLayout();
+                        setStatus("Đã thoát Broadcast Mode. Giữ lâu trên màn hình fullscreen để thoát lần sau.");
+                    }
+                },
+                120L);
+    }
+
+    private void applyBroadcastVideoLayout() {
+        int hostWidth = binding.broadcastOverlay.getWidth();
+        int hostHeight = binding.broadcastOverlay.getHeight();
+        if (hostWidth <= 0 || hostHeight <= 0 || sourceVideoWidth <= 0 || sourceVideoHeight <= 0) {
+            return;
+        }
+
+        float sourceAspect = (float) sourceVideoWidth / (float) sourceVideoHeight;
+        float hostAspect = (float) hostWidth / (float) hostHeight;
+        int targetWidth;
+        int targetHeight;
+
+        if (broadcastFill) {
+            // Center-crop so TikTok receives picture all the way to every edge.
+            if (hostAspect > sourceAspect) {
+                targetWidth = hostWidth;
+                targetHeight = Math.round(hostWidth / sourceAspect);
+            } else {
+                targetHeight = hostHeight;
+                targetWidth = Math.round(hostHeight * sourceAspect);
+            }
+        } else {
+            // FIT is available by double-tap if the user wants the entire GoPro frame visible.
+            if (hostAspect > sourceAspect) {
+                targetHeight = hostHeight;
+                targetWidth = Math.round(hostHeight * sourceAspect);
+            } else {
+                targetWidth = hostWidth;
+                targetHeight = Math.round(hostWidth / sourceAspect);
+            }
+        }
+
+        FrameLayout.LayoutParams params =
+                new FrameLayout.LayoutParams(targetWidth, targetHeight, Gravity.CENTER);
+        binding.broadcastSurfaceView.setLayoutParams(params);
+    }
+
+    private void resetBroadcastSurfaceLayout() {
+        binding.broadcastSurfaceView.setLayoutParams(
+                new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        Gravity.CENTER));
+    }
+
+    private void hideSystemBarsForBroadcast() {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        WindowInsetsControllerCompat controller =
+                WindowCompat.getInsetsController(getWindow(), binding.main);
+        controller.hide(WindowInsetsCompat.Type.systemBars());
+        controller.setSystemBarsBehavior(
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+    }
+
+    private void restoreSystemBars() {
+        WindowInsetsControllerCompat controller =
+                WindowCompat.getInsetsController(getWindow(), binding.main);
+        controller.show(WindowInsetsCompat.Type.systemBars());
     }
 
     private void prepareConnection() {
@@ -268,6 +498,7 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
         binding.httpResponseText.setText(R.string.http_response_empty);
         binding.udpStatsText.setText(R.string.udp_stats_empty);
         binding.previewErrorText.setVisibility(View.GONE);
+        binding.broadcastButton.setEnabled(false);
 
         String[] missing = missingRuntimePermissions();
         if (missing.length > 0) {
@@ -282,6 +513,7 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
         binding.connectButton.setEnabled(false);
         binding.verifyButton.setEnabled(false);
         binding.startPreviewButton.setEnabled(false);
+        binding.broadcastButton.setEnabled(false);
         bleManager.enableWifiAp();
     }
 
@@ -320,6 +552,7 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
                         binding.connectButton.setEnabled(true);
                         binding.verifyButton.setEnabled(true);
                         binding.startPreviewButton.setEnabled(false);
+                        binding.broadcastButton.setEnabled(false);
                         setStatus(
                                 message
                                         + "\nBLE đã được bootstrap nhưng HTTP chưa sẵn sàng; thử Kiểm tra HTTP lại sau vài giây.");
@@ -337,14 +570,14 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
 
         binding.startPreviewButton.setEnabled(false);
         binding.stopPreviewButton.setEnabled(true);
+        binding.broadcastButton.setEnabled(false);
         binding.udpStatsText.setText("Đang bind UDP + khởi tạo MediaCodec…");
         binding.previewErrorText.setVisibility(View.VISIBLE);
-        binding.previewErrorText.setText("Đang chuẩn bị MediaCodec…");
+        binding.previewErrorText.setText("Đang chuẩn bị MediaCodec + PTS pacing…");
 
         pendingPreviewNetwork = network;
         pendingCameraPreviewStart = true;
 
-        // Critical ordering: decoder and UDP/8554 must be ready before HERO8 receives gpStream=start.
         previewPlayer.start();
         previewProbe.start(network);
     }
@@ -367,6 +600,7 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
                         previewPlayer.stop();
                         binding.startPreviewButton.setEnabled(true);
                         binding.stopPreviewButton.setEnabled(false);
+                        binding.broadcastButton.setEnabled(false);
                         binding.previewErrorText.setVisibility(View.VISIBLE);
                         binding.previewErrorText.setText("Không start được gpStream");
                         setStatus("Không start được preview: " + message);
@@ -375,11 +609,15 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
     }
 
     private void stopPreviewProbe(boolean sendStopCommand) {
+        if (broadcastMode) {
+            exitBroadcastMode();
+        }
         pendingCameraPreviewStart = false;
         pendingPreviewNetwork = null;
         previewProbe.stop();
         previewPlayer.stop();
         binding.previewErrorText.setVisibility(View.GONE);
+        binding.broadcastButton.setEnabled(false);
         binding.udpStatsText.setText(R.string.udp_stats_empty);
 
         Network network = networkManager.getActiveNetwork();
@@ -463,6 +701,7 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
         binding.verifyButton.setEnabled(false);
         binding.startPreviewButton.setEnabled(false);
         binding.stopPreviewButton.setEnabled(false);
+        binding.broadcastButton.setEnabled(false);
         binding.disconnectButton.setEnabled(true);
         setStatus("BLE đã kích hoạt camera. Đang chờ Android kết nối Wi-Fi GoPro…");
     }
@@ -473,6 +712,7 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
         binding.verifyButton.setEnabled(true);
         binding.startPreviewButton.setEnabled(false);
         binding.stopPreviewButton.setEnabled(false);
+        binding.broadcastButton.setEnabled(false);
         binding.disconnectButton.setEnabled(true);
         setStatus("Đã có network GoPro: " + network + ". Đợi HTTP service khởi động…");
         mainHandler.postDelayed(this::verifyHero8Http, 1_500L);
@@ -480,6 +720,9 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
 
     @Override
     public void onDisconnected() {
+        if (broadcastMode) {
+            exitBroadcastMode();
+        }
         pendingCameraPreviewStart = false;
         pendingPreviewNetwork = null;
         previewProbe.close();
@@ -489,6 +732,7 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
         binding.verifyButton.setEnabled(false);
         binding.startPreviewButton.setEnabled(false);
         binding.stopPreviewButton.setEnabled(false);
+        binding.broadcastButton.setEnabled(false);
         binding.disconnectButton.setEnabled(false);
         binding.udpStatsText.setText(R.string.udp_stats_empty);
         setStatus("Đã ngắt kết nối GoPro.");
@@ -496,6 +740,9 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
 
     @Override
     public void onError(@NonNull String message) {
+        if (broadcastMode) {
+            exitBroadcastMode();
+        }
         pendingCameraPreviewStart = false;
         pendingPreviewNetwork = null;
         previewProbe.close();
@@ -505,6 +752,7 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
         binding.verifyButton.setEnabled(false);
         binding.startPreviewButton.setEnabled(false);
         binding.stopPreviewButton.setEnabled(false);
+        binding.broadcastButton.setEnabled(false);
         binding.disconnectButton.setEnabled(false);
         setStatus(message);
     }
