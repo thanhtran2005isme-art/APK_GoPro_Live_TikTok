@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * Debug probe for the legacy GoPro UDP preview stream.
  *
- * <p>The probe receives UDP/8554, keeps the legacy preview session alive and feeds the incoming
+ * <p>The probe receives UDP/8554, keeps the HERO8 preview session alive and feeds the incoming
  * bytes to {@link MpegTsStreamInspector}. It still does not decode/render frames; its job is to
  * prove the real HERO8 stream format before the playback pipeline is selected.</p>
  */
@@ -44,8 +44,10 @@ public final class Hero8UdpPreviewProbe implements AutoCloseable {
     private static final int UDP_PORT = 8554;
     private static final int RECEIVE_TIMEOUT_MS = 1_000;
     private static final long KEEP_ALIVE_PERIOD_MS = 2_500L;
+
+    // HERO8/HERO9 use controller id 1 in the legacy _GPHD_ keep-alive packet.
     private static final byte[] KEEP_ALIVE_PAYLOAD =
-            "_GPHD_:0:0:2:0.000000\n".getBytes(StandardCharsets.UTF_8);
+            "_GPHD_:1:0:2:0.000000\n".getBytes(StandardCharsets.UTF_8);
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Listener listener;
