@@ -72,7 +72,7 @@ public final class Hero8BleManager implements AutoCloseable {
     private static final long COMMAND_TIMEOUT_MS = 7_000L;
 
     private final Context context;
-    private final Listener listener;
+    @NonNull private Listener listener;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final BluetoothAdapter bluetoothAdapter;
 
