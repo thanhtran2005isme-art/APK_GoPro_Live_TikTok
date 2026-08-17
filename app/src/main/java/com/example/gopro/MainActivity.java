@@ -5,6 +5,8 @@ import android.content.pm.PackageManager;
 import android.net.Network;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 
 import androidx.activity.EdgeToEdge;
 import androidx.activity.result.ActivityResultLauncher;
@@ -17,32 +19,40 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.example.gopro.camera.hero8.GoProHttpClient;
+import com.example.gopro.camera.hero8.Hero8BleManager;
 import com.example.gopro.camera.hero8.Hero8UdpPreviewProbe;
 import com.example.gopro.camera.hero8.MpegTsStreamInspector;
 import com.example.gopro.databinding.ActivityMainBinding;
 import com.example.gopro.network.GoProNetworkManager;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
-/** Debug-first entry screen for validating HERO8 Wi-Fi, gpControl and preview stream format. */
+/** Debug-first entry screen for validating HERO8 BLE, Wi-Fi, gpControl and preview format. */
 public class MainActivity extends AppCompatActivity implements GoProNetworkManager.Listener {
 
     private ActivityMainBinding binding;
     private GoProNetworkManager networkManager;
     private GoProHttpClient httpClient;
+    private Hero8BleManager bleManager;
     private Hero8UdpPreviewProbe previewProbe;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private String pendingSsid;
     private String pendingPassword;
 
-    private final ActivityResultLauncher<String> permissionLauncher =
+    private final ActivityResultLauncher<String[]> permissionLauncher =
             registerForActivityResult(
-                    new ActivityResultContracts.RequestPermission(),
-                    granted -> {
-                        if (granted) {
-                            connectToPendingGoPro();
+                    new ActivityResultContracts.RequestMultiplePermissions(),
+                    result -> {
+                        if (allGranted(result)) {
+                            startBleBootstrap();
                         } else {
-                            setStatus("Không có quyền Wi-Fi cần thiết để kết nối GoPro.");
+                            binding.connectButton.setEnabled(true);
+                            setStatus(
+                                    "Thiếu quyền Bluetooth/Wi-Fi. App cần BLE để kích hoạt HERO8 trước khi kết nối Wi-Fi.");
                         }
                     });
 
@@ -64,6 +74,49 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
 
         networkManager = new GoProNetworkManager(this, this);
         httpClient = new GoProHttpClient();
+        bleManager =
+                new Hero8BleManager(
+                        this,
+                        new Hero8BleManager.Listener() {
+                            @Override
+                            public void onScanning() {
+                                binding.connectButton.setEnabled(false);
+                                setStatus(
+                                        "Đang tìm HERO8 qua BLE… Nếu camera chưa hiện, mở Connections > Connect Device > GoPro Quik App.");
+                            }
+
+                            @Override
+                            public void onPairing(@NonNull String deviceName) {
+                                setStatus(
+                                        "Đã tìm thấy " + deviceName
+                                                + ". Đang ghép đôi Bluetooth; xác nhận popup nếu Android yêu cầu.");
+                            }
+
+                            @Override
+                            public void onBleConnecting(@NonNull String deviceName) {
+                                setStatus(
+                                        "Đang kết nối BLE tới " + deviceName
+                                                + " và kích hoạt Wi-Fi control service…");
+                            }
+
+                            @Override
+                            public void onWifiApEnabled(@NonNull String deviceName) {
+                                setStatus(
+                                        "BLE " + deviceName
+                                                + " OK. HERO8 đã nhận lệnh bật Wi-Fi AP; đang kết nối SSID…");
+                                mainHandler.postDelayed(
+                                        MainActivity.this::connectToPendingGoPro, 1_500L);
+                            }
+
+                            @Override
+                            public void onError(@NonNull String message) {
+                                binding.connectButton.setEnabled(true);
+                                binding.verifyButton.setEnabled(false);
+                                binding.startPreviewButton.setEnabled(false);
+                                setStatus("BLE HERO8: " + message);
+                            }
+                        });
+
         previewProbe =
                 new Hero8UdpPreviewProbe(
                         new Hero8UdpPreviewProbe.Listener() {
@@ -149,6 +202,7 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
         binding.disconnectButton.setOnClickListener(
                 view -> {
                     stopPreviewProbe(false);
+                    bleManager.close();
                     networkManager.disconnect();
                 });
         binding.verifyButton.setOnClickListener(view -> verifyHero8Http());
@@ -175,24 +229,30 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
 
         pendingSsid = ssid;
         pendingPassword = password;
+        binding.httpResponseText.setText(R.string.http_response_empty);
+        binding.udpStatsText.setText(R.string.udp_stats_empty);
 
-        String permission = requiredWifiPermission();
-        if (permission != null
-                && ContextCompat.checkSelfPermission(this, permission)
-                        != PackageManager.PERMISSION_GRANTED) {
-            permissionLauncher.launch(permission);
+        String[] missing = missingRuntimePermissions();
+        if (missing.length > 0) {
+            permissionLauncher.launch(missing);
             return;
         }
 
-        connectToPendingGoPro();
+        startBleBootstrap();
+    }
+
+    private void startBleBootstrap() {
+        binding.connectButton.setEnabled(false);
+        binding.verifyButton.setEnabled(false);
+        binding.startPreviewButton.setEnabled(false);
+        bleManager.enableWifiAp();
     }
 
     private void connectToPendingGoPro() {
         if (pendingSsid == null || pendingSsid.isEmpty()) {
+            binding.connectButton.setEnabled(true);
             return;
         }
-        binding.httpResponseText.setText(R.string.http_response_empty);
-        binding.udpStatsText.setText(R.string.udp_stats_empty);
         networkManager.connect(pendingSsid, pendingPassword);
     }
 
@@ -204,13 +264,14 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
         }
 
         binding.verifyButton.setEnabled(false);
-        setStatus("Đang gọi http://10.5.5.9/gp/gpControl/status …");
+        setStatus("BLE/Wi-Fi OK. Đang gọi http://10.5.5.9/gp/gpControl/status …");
 
         httpClient.verifyConnection(
                 network,
                 new GoProHttpClient.Callback() {
                     @Override
                     public void onSuccess(@NonNull String body) {
+                        binding.connectButton.setEnabled(true);
                         binding.verifyButton.setEnabled(true);
                         binding.startPreviewButton.setEnabled(true);
                         setStatus("HTTP HERO8 OK. Có thể chạy preview inspector.");
@@ -219,9 +280,12 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
 
                     @Override
                     public void onError(@NonNull String message) {
+                        binding.connectButton.setEnabled(true);
                         binding.verifyButton.setEnabled(true);
                         binding.startPreviewButton.setEnabled(false);
-                        setStatus(message);
+                        setStatus(
+                                message
+                                        + "\nBLE đã được bootstrap nhưng HTTP chưa sẵn sàng; thử Kiểm tra HTTP lại sau vài giây.");
                         binding.httpResponseText.setText(R.string.http_response_empty);
                     }
                 });
@@ -283,14 +347,41 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
                 });
     }
 
-    private String requiredWifiPermission() {
+    @NonNull
+    private String[] missingRuntimePermissions() {
+        List<String> required = new ArrayList<>();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            required.add(Manifest.permission.BLUETOOTH_SCAN);
+            required.add(Manifest.permission.BLUETOOTH_CONNECT);
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            return Manifest.permission.NEARBY_WIFI_DEVICES;
+            required.add(Manifest.permission.NEARBY_WIFI_DEVICES);
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            required.add(Manifest.permission.ACCESS_FINE_LOCATION);
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            return Manifest.permission.ACCESS_FINE_LOCATION;
+
+        List<String> missing = new ArrayList<>();
+        for (String permission : required) {
+            if (ContextCompat.checkSelfPermission(this, permission)
+                    != PackageManager.PERMISSION_GRANTED) {
+                missing.add(permission);
+            }
         }
-        return null;
+        return missing.toArray(new String[0]);
+    }
+
+    private static boolean allGranted(@NonNull Map<String, Boolean> result) {
+        if (result.isEmpty()) {
+            return false;
+        }
+        for (Boolean granted : result.values()) {
+            if (!Boolean.TRUE.equals(granted)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static String textOf(android.widget.EditText input) {
@@ -316,17 +407,18 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
         binding.startPreviewButton.setEnabled(false);
         binding.stopPreviewButton.setEnabled(false);
         binding.disconnectButton.setEnabled(true);
-        setStatus("Đang chờ Android kết nối Wi-Fi GoPro… Hãy xác nhận hộp thoại hệ thống.");
+        setStatus("BLE đã kích hoạt camera. Đang chờ Android kết nối Wi-Fi GoPro…");
     }
 
     @Override
     public void onConnected(@NonNull Network network) {
-        binding.connectButton.setEnabled(true);
+        binding.connectButton.setEnabled(false);
         binding.verifyButton.setEnabled(true);
         binding.startPreviewButton.setEnabled(false);
         binding.stopPreviewButton.setEnabled(false);
         binding.disconnectButton.setEnabled(true);
-        setStatus("Đã kết nối network GoPro: " + network + ". Bấm Kiểm tra HTTP.");
+        setStatus("Đã có network GoPro: " + network + ". Đợi HTTP service khởi động…");
+        mainHandler.postDelayed(this::verifyHero8Http, 1_500L);
     }
 
     @Override
@@ -354,8 +446,12 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
 
     @Override
     protected void onDestroy() {
+        mainHandler.removeCallbacksAndMessages(null);
         if (previewProbe != null) {
             previewProbe.close();
+        }
+        if (bleManager != null) {
+            bleManager.close();
         }
         if (networkManager != null) {
             networkManager.close();
