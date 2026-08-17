@@ -20,7 +20,7 @@ import androidx.annotation.Nullable;
  * internet traffic free to use cellular or another validated network while the camera traffic stays
  * on the GoPro Wi-Fi link.</p>
  */
-public final class GoProNetworkManager {
+public final class GoProNetworkManager implements AutoCloseable {
 
     public interface Listener {
         void onConnecting();
@@ -39,10 +39,10 @@ public final class GoProNetworkManager {
     private final Listener listener;
 
     @Nullable
-    private ConnectivityManager.NetworkCallback networkCallback;
+    private volatile ConnectivityManager.NetworkCallback networkCallback;
 
     @Nullable
-    private Network activeNetwork;
+    private volatile Network activeNetwork;
 
     public GoProNetworkManager(@NonNull Context context, @NonNull Listener listener) {
         connectivityManager =
@@ -137,5 +137,10 @@ public final class GoProNetworkManager {
     @Nullable
     public Network getActiveNetwork() {
         return activeNetwork;
+    }
+
+    @Override
+    public void close() {
+        disconnectInternal(false);
     }
 }
