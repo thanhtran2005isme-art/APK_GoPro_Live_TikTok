@@ -6,9 +6,13 @@
     <string name="gopro_password">Mật khẩu Wi-Fi GoPro</string>
     <string name="connect_gopro">Kết nối HERO8</string>
     <string name="verify_http">Kiểm tra HTTP 10.5.5.9</string>
+    <string name="start_preview_probe">Start preview + UDP probe</string>
+    <string name="stop_preview_probe">Stop preview probe</string>
     <string name="disconnect">Ngắt kết nối</string>
     <string name="status_label">Trạng thái</string>
     <string name="status_idle">Chưa kết nối.</string>
+    <string name="udp_stats_label">UDP 8554</string>
+    <string name="udp_stats_empty">Chưa nhận packet.</string>
     <string name="http_response_label">Phản hồi gpControl</string>
     <string name="http_response_empty">Chưa có phản hồi.</string>
 </resources>
