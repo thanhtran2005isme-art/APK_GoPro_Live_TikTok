@@ -321,12 +321,11 @@ public class MainActivity extends AppCompatActivity implements GoProNetworkManag
             previewProbe.close();
         }
         if (networkManager != null) {
-            networkManager.disconnect();
+            networkManager.close();
         }
         if (httpClient != null) {
             httpClient.close();
         }
-        binding = null;
         super.onDestroy();
     }
 }
