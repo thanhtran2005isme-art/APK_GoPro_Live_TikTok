@@ -2,6 +2,7 @@ package com.example.gopro.camera.hero8;
 
 import android.media.MediaCodec;
 import android.media.MediaFormat;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Surface;
@@ -15,8 +16,8 @@ import androidx.media3.common.util.UnstableApi;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -24,9 +25,10 @@ import java.util.concurrent.Executors;
 /**
  * Low-latency HERO8 preview renderer.
  *
- * <p>This path deliberately bypasses ExoPlayer/Media3. HERO8 supplies a live MPEG-TS stream over
- * UDP; this class demuxes the H.264 PES payload in-process, discovers SPS/PPS and feeds H.264
- * access units directly into Android's hardware {@link MediaCodec} decoder.</p>
+ * <p>HERO8 supplies a live MPEG-TS stream over UDP. This class demuxes the H.264 PES payload,
+ * preserves the real 90 kHz PES PTS, holds only 2-3 frames as a tiny jitter buffer and schedules
+ * decoded output to the Surface by presentation timestamp. The Surface therefore presents a steady
+ * 30 fps cadence even when UDP packets arrive in small bursts.</p>
  */
 @UnstableApi
 public final class Hero8PreviewPlayer implements AutoCloseable {
@@ -41,9 +43,15 @@ public final class Hero8PreviewPlayer implements AutoCloseable {
 
     private static final int TS_PACKET_SIZE = 188;
     private static final int UNKNOWN_PID = -1;
-    private static final long PIPE_POLL_MS = 250L;
-    private static final long INPUT_TIMEOUT_US = 10_000L;
+    private static final long PIPE_POLL_MS = 50L;
+    private static final long INPUT_TIMEOUT_US = 8_000L;
     private static final long DEFAULT_FRAME_DURATION_US = 33_333L;
+
+    // Three access units in the queue means roughly two frames (~66 ms at 30 fps) are held back.
+    private static final int JITTER_BUFFER_TARGET_FRAMES = 3;
+    private static final long PACER_START_DELAY_NS = 8_000_000L;
+    private static final long MAX_LATE_FRAME_NS = 70_000_000L;
+    private static final long MIN_SCHEDULE_AHEAD_NS = 1_000_000L;
 
     private final SurfaceView surfaceView;
     private final Listener listener;
@@ -67,6 +75,7 @@ public final class Hero8PreviewPlayer implements AutoCloseable {
                     @Override
                     public void surfaceCreated(@NonNull SurfaceHolder holder) {
                         surface = holder.getSurface();
+                        requestThirtyFpsSurface(holder.getSurface());
                     }
 
                     @Override
@@ -76,6 +85,7 @@ public final class Hero8PreviewPlayer implements AutoCloseable {
                             int width,
                             int height) {
                         surface = holder.getSurface();
+                        requestThirtyFpsSurface(holder.getSurface());
                     }
 
                     @Override
@@ -85,14 +95,14 @@ public final class Hero8PreviewPlayer implements AutoCloseable {
                 });
     }
 
-    /** Starts a fresh decoder session. Must be called before the UDP receiver starts feeding TS. */
+    /** Starts a fresh decoder session. Must be called before UDP begins feeding transport stream. */
     public synchronized void start() {
         stopInternal();
         tsPipe.reset();
         running = true;
         decoderExecutor = Executors.newSingleThreadExecutor();
         decoderExecutor.execute(this::decodeLoop);
-        postStatus("MediaCodec đang chờ SPS/PPS và keyframe từ HERO8…");
+        postStatus("Đang chờ SPS/PPS/IDR; PTS pacing + jitter buffer 3 frame đã bật…");
     }
 
     public synchronized void stop() {
@@ -118,9 +128,12 @@ public final class Hero8PreviewPlayer implements AutoCloseable {
                 }
                 return;
             }
+            requestThirtyFpsSurface(outputSurface);
 
             TsH264Demuxer demuxer = new TsH264Demuxer();
             MpegTsStreamInspector inspector = new MpegTsStreamInspector();
+            ArrayDeque<AccessUnit> jitterBuffer = new ArrayDeque<>();
+            FramePacer framePacer = new FramePacer();
 
             byte[] sps = null;
             byte[] pps = null;
@@ -142,7 +155,11 @@ public final class Hero8PreviewPlayer implements AutoCloseable {
                         return;
                     }
                     if (codec != null) {
-                        drainOutput(codec, false);
+                        boolean rendered = drainOutput(codec, framePacer);
+                        if (rendered && firstFrame) {
+                            firstFrame = false;
+                            mainHandler.post(listener::onFirstFrame);
+                        }
                     }
                     continue;
                 }
@@ -173,11 +190,11 @@ public final class Hero8PreviewPlayer implements AutoCloseable {
                                 sps,
                                 pps);
                         postStatus(
-                                "MediaCodec H.264 đã khởi tạo "
+                                "MediaCodec "
                                         + snapshot.width
                                         + "x"
                                         + snapshot.height
-                                        + "; đang chờ IDR frame…");
+                                        + " sẵn sàng; đang chờ IDR frame…");
                     }
 
                     if (codec == null) {
@@ -190,21 +207,31 @@ public final class Hero8PreviewPlayer implements AutoCloseable {
                             continue;
                         }
                         waitingForIdr = false;
-                        postStatus("Đã nhận IDR frame; bắt đầu hardware decode…");
+                        jitterBuffer.clear();
+                        framePacer.reset();
+                        postStatus("Đã nhận IDR; đang phát theo PTS với jitter buffer ~2 frame…");
                     }
 
                     long ptsUs = accessUnit.ptsUs;
                     if (ptsUs < 0L) {
                         ptsUs = syntheticPtsUs;
                     }
-                    syntheticPtsUs = Math.max(syntheticPtsUs + DEFAULT_FRAME_DURATION_US,
+                    syntheticPtsUs = Math.max(
+                            syntheticPtsUs + DEFAULT_FRAME_DURATION_US,
                             ptsUs + DEFAULT_FRAME_DURATION_US);
 
-                    queueAccessUnit(codec, accessUnit.data, ptsUs);
-                    boolean rendered = drainOutput(codec, true);
-                    if (rendered && firstFrame) {
-                        firstFrame = false;
-                        mainHandler.post(listener::onFirstFrame);
+                    jitterBuffer.addLast(new AccessUnit(accessUnit.data, ptsUs));
+
+                    // Keep only a tiny 2-frame look-ahead. This smooths packet burst timing without
+                    // allowing latency to grow over time.
+                    while (jitterBuffer.size() >= JITTER_BUFFER_TARGET_FRAMES) {
+                        AccessUnit ready = jitterBuffer.removeFirst();
+                        queueAccessUnit(codec, ready.data, ready.ptsUs);
+                        boolean rendered = drainOutput(codec, framePacer);
+                        if (rendered && firstFrame) {
+                            firstFrame = false;
+                            mainHandler.post(listener::onFirstFrame);
+                        }
                     }
                 }
             }
@@ -241,6 +268,16 @@ public final class Hero8PreviewPlayer implements AutoCloseable {
         return null;
     }
 
+    private static void requestThirtyFpsSurface(@NonNull Surface outputSurface) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && outputSurface.isValid()) {
+            try {
+                outputSurface.setFrameRate(30.0f, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
+            } catch (IllegalStateException ignored) {
+                // Some vendor Surface implementations reject the hint while being recreated.
+            }
+        }
+    }
+
     @NonNull
     private static MediaCodec createDecoder(
             @NonNull Surface surface,
@@ -268,7 +305,7 @@ public final class Hero8PreviewPlayer implements AutoCloseable {
         while (position < data.length) {
             int inputIndex = codec.dequeueInputBuffer(INPUT_TIMEOUT_US);
             if (inputIndex < 0) {
-                // Keep latency bounded: if decoder has no input buffer right now, drop this frame.
+                // Prefer dropping one compressed frame over accumulating live-preview latency.
                 return;
             }
 
@@ -287,21 +324,72 @@ public final class Hero8PreviewPlayer implements AutoCloseable {
         }
     }
 
-    private static boolean drainOutput(@NonNull MediaCodec codec, boolean render) {
+    /** Releases decoded frames to Surface at their PTS-derived render time instead of immediately. */
+    private static boolean drainOutput(
+            @NonNull MediaCodec codec,
+            @NonNull FramePacer framePacer) {
         boolean renderedAny = false;
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+
         while (true) {
             int outputIndex = codec.dequeueOutputBuffer(info, 0L);
             if (outputIndex >= 0) {
-                codec.releaseOutputBuffer(outputIndex, render);
-                renderedAny |= render && info.size >= 0;
+                boolean codecConfig = (info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0;
+                if (codecConfig) {
+                    codec.releaseOutputBuffer(outputIndex, false);
+                    continue;
+                }
+
+                long renderTimeNs = framePacer.renderTimeNs(info.presentationTimeUs);
+                if (renderTimeNs == FramePacer.DROP_FRAME) {
+                    codec.releaseOutputBuffer(outputIndex, false);
+                } else {
+                    codec.releaseOutputBuffer(outputIndex, renderTimeNs);
+                    renderedAny = true;
+                }
                 continue;
             }
+
             if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED
                     || outputIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
                 continue;
             }
             return renderedAny;
+        }
+    }
+
+    /** Maps PES PTS to CLOCK_MONOTONIC and drops only frames that are already badly late. */
+    private static final class FramePacer {
+        static final long DROP_FRAME = Long.MIN_VALUE;
+
+        private long firstPtsUs = Long.MIN_VALUE;
+        private long firstRenderNs;
+
+        void reset() {
+            firstPtsUs = Long.MIN_VALUE;
+            firstRenderNs = 0L;
+        }
+
+        long renderTimeNs(long ptsUs) {
+            long nowNs = System.nanoTime();
+            if (firstPtsUs == Long.MIN_VALUE) {
+                firstPtsUs = ptsUs;
+                firstRenderNs = nowNs + PACER_START_DELAY_NS;
+            }
+
+            long deltaUs = ptsUs - firstPtsUs;
+            if (deltaUs < -1_000_000L || deltaUs > 60_000_000L) {
+                // Timestamp discontinuity: re-anchor instead of producing a huge pause/burst.
+                firstPtsUs = ptsUs;
+                firstRenderNs = nowNs + PACER_START_DELAY_NS;
+                deltaUs = 0L;
+            }
+
+            long targetNs = firstRenderNs + deltaUs * 1_000L;
+            if (targetNs < nowNs - MAX_LATE_FRAME_NS) {
+                return DROP_FRAME;
+            }
+            return Math.max(targetNs, nowNs + MIN_SCHEDULE_AHEAD_NS);
         }
     }
 
