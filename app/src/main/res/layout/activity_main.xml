@@ -27,15 +27,32 @@
             android:text="@string/setup_description"
             android:textAppearance="?attr/textAppearanceBodyMedium" />
 
-        <androidx.media3.ui.PlayerView
-            android:id="@+id/previewPlayerView"
+        <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="220dp"
             android:layout_marginTop="20dp"
-            android:background="#000000"
-            app:resize_mode="fit"
-            app:show_buffering="when_playing"
-            app:use_controller="false" />
+            android:background="#000000">
+
+            <SurfaceView
+                android:id="@+id/previewSurfaceView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:keepScreenOn="true" />
+
+            <TextView
+                android:id="@+id/previewErrorText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:background="#CC333333"
+                android:gravity="center"
+                android:padding="12dp"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:visibility="gone"
+                tools:text="Decoder status" />
+
+        </FrameLayout>
 
         <TextView
             android:layout_width="match_parent"
